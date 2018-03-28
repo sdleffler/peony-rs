@@ -86,17 +86,8 @@ pub enum ErrorKind {
     #[fail(display = "expected an identifier")]
     ExpectedIdentifier,
 
-    #[fail(display = "'{:?}' is not valid as the starting character of an identifier", _0)]
-    InvalidIdentifierStart(char),
-
-    #[fail(display = "character '{:?}' is not valid as part of an identifier", _0)]
-    InvalidIdentifierCont(char),
-
     #[fail(display = "unrecognized token")]
     UnrecognizedToken,
-
-    #[fail(display = "expected a boolean")]
-    ExpectedBoolean,
 
     #[fail(display = "expected end of nested comment ({} levels deep)", _0)]
     ExpectedEndOfNestedComment(u8),
@@ -104,17 +95,11 @@ pub enum ErrorKind {
     #[fail(display = "expected a character")]
     ExpectedCharacter,
 
-    #[fail(display = "expected a character, character name, or hex code")]
-    ExpectedCharacterCont,
-
     #[fail(display = "invalid hexadecimal character code: {}", _0)]
     InvalidHexCode(ParseIntError),
 
     #[fail(display = "invalid character code, no such unicode code point {}", _0)]
     InvalidCharacter(u32),
-
-    #[fail(display = "unrecognized character name")]
-    UnrecognizedCharacterName,
 
     #[fail(display = "expected a line ending")]
     ExpectedLineEnding,
@@ -430,23 +415,6 @@ impl<'input> Lexer<'input> {
         }
     }
 
-    fn bump_to(&mut self, bytes: usize) {
-        self.lookahead.clear();
-        self.chars
-            .by_ref()
-            .peeking_take_while(|&(idx0, _)| idx0 < bytes)
-            .for_each(|_| ());
-
-        self.chars.reset_peek();
-        if let Some(&(loc, c)) = self.chars.peek() {
-            self.location = Some(loc);
-            self.lookahead.push(c);
-            self.lookahead.extend(self.chars.peek().map(|t| t.1));
-        } else {
-            self.location = None;
-        }
-    }
-
     fn expect_delimiter<F: FnOnce() -> Result<Spanned, Error>>(
         &self,
         thunk: F,
@@ -540,9 +508,9 @@ impl<'input> Lexer<'input> {
         idx0: usize,
         number_flags: NumberFlags,
     ) -> Option<Result<Spanned, Error>> {
-        let (slice, idx1) = match self.bump_until(is_delimiter) {
-            Some(idx1) => (&self.text[idx0..idx1], idx1),
-            None => (&self.text[idx0..], self.text.len()),
+        let slice = match self.bump_until(is_delimiter) {
+            Some(idx1) => &self.text[idx0..idx1],
+            None => &self.text[idx0..],
         };
 
         let number_lexer = NumberLexer::new(slice, idx0, number_flags.to_radix());
@@ -684,7 +652,6 @@ impl<'input> Lexer<'input> {
                 };
 
                 buf.push_str(&self.text[loc..idx1]);
-                loc = idx1;
 
                 if self.lookahead.starts_with('\\') {
                     if self.lookahead
@@ -701,12 +668,10 @@ impl<'input> Lexer<'input> {
                                 self.bump(n);
                             }
                             None => {
-                                println!("oops {:?}", self.lookahead);
-
                                 return Some(Err(Error::new(
                                     ErrorKind::ExpectedLineEnding,
                                     break_loc,
-                                )))
+                                )));
                             }
                         }
 
@@ -715,7 +680,32 @@ impl<'input> Lexer<'input> {
                             None => return Some(Err(Error::new(ErrorKind::UnexpectedEof, idx0))),
                         }
                     } else if self.lookahead == r"\x" {
-                        unimplemented!();
+                        let hex_loc = match self.bump(2) {
+                            Some(hex_loc) => hex_loc,
+                            None => return Some(Err(Error::new(ErrorKind::UnexpectedEof, idx0))),
+                        };
+
+                        let (hex_slice, idx1) = match self.bump_while(|c| c.is_ascii_hexdigit()) {
+                            Some(idx1) => (&self.text[hex_loc..idx1], idx1),
+                            None => (&self.text[hex_loc..], self.text.len()),
+                        };
+
+                        loc = idx1;
+
+                        match u32::from_str_radix(hex_slice, 16) {
+                            Ok(n) => match char::from_u32(n) {
+                                Some(c) => buf.push(c),
+                                None => {
+                                    return Some(Err(Error::new(
+                                        ErrorKind::InvalidCharacter(n),
+                                        idx0,
+                                    )))
+                                }
+                            },
+                            Err(e) => {
+                                return Some(Err(Error::new(ErrorKind::InvalidHexCode(e), idx0)))
+                            }
+                        }
                     } else {
                         let c = match &*self.lookahead {
                             r#"\a"# => '\x07',
@@ -765,8 +755,6 @@ impl<'input> Lexer<'input> {
                 Some(idx0) => idx0,
                 None => return None,
             };
-
-            println!("position {}", idx0);
 
             // interlexeme space
             {
@@ -883,14 +871,19 @@ mod tests {
         let multiline_string_raw = "this is a \\ \n\t  multiline string";
         let multiline_string_cooked = "this is a multiline string";
 
-        let input = &[plain_string, multiline_string_raw]
-            .iter()
+        let string_with_hex_escape_raw = "this is a string \\x77ith an escape!";
+        let string_with_hex_escape_cooked = "this is a string with an escape!";
+
+        let input = &[
+            plain_string,
+            multiline_string_raw,
+            string_with_hex_escape_raw,
+        ].iter()
             .map(|s| format!("\"{}\"", s))
             .join("\n");
 
         let lexer = Lexer::new(&input, 0);
         let tokens = match lexer
-            .inspect(|t| println!("T-T-TOKENIZED: {:?}", t))
             .map(|r| r.map(|t| t.1))
             .collect::<Result<Vec<_>, _>>()
         {
@@ -905,6 +898,7 @@ mod tests {
             vec![
                 String(Atom::from(plain_string)),
                 String(Atom::from(multiline_string_cooked)),
+                String(Atom::from(string_with_hex_escape_cooked)),
             ]
         );
     }
@@ -957,6 +951,7 @@ mod tests {
         pass {
             hofstadter,
             string,
+            string_escapes,
         }
     }
 }
