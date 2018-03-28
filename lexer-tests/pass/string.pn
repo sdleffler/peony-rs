@@ -1,0 +1,6 @@
+"this is a string!"
+
+"this is a multiline \
+    string!"
+
+"this is a string with \"escaped\" quotes in it!"

@@ -27,9 +27,12 @@ fn is_delimiter(c: char) -> bool {
 }
 
 fn is_constituent(c: char) -> bool {
-    c.is_letter() || c.is_mark_nonspacing() || c.is_number_letter() || c.is_number_other()
-        || c.is_punctuation_connector() || c.is_punctuation_dash() || c.is_punctuation_other()
-        || c.is_symbol() || c.is_other_private_use()
+    c.is_ascii_alphabetic()
+        || (c as u32 > 127
+            && (c.is_letter() || c.is_mark_nonspacing() || c.is_number_letter()
+                || c.is_number_other() || c.is_punctuation_connector()
+                || c.is_punctuation_dash() || c.is_punctuation_other()
+                || c.is_symbol() || c.is_other_private_use()))
 }
 
 fn is_initial(c: char) -> bool {
@@ -40,7 +43,10 @@ fn is_initial(c: char) -> bool {
 }
 
 fn is_subsequent(c: char) -> bool {
-    is_initial(c) || c.is_number() || c.is_mark()
+    match c {
+        '+' | '-' | '.' | '@' => true,
+        _ => is_initial(c) || c.is_number() || c.is_mark(),
+    }
 }
 
 fn is_start_peculiar(c: char) -> bool {
@@ -61,13 +67,12 @@ fn is_start_line_ending(c: char) -> bool {
     }
 }
 
-// Returns `n` characters for an n-character line ending, unless `n == 0`, in which case `s` is not
-// a line ending.
-fn detect_line_ending(s: &str) -> usize {
+// Returns `n` characters for an n-character line ending, unless `n == 0`, in which case `s` does not start a line ending.
+fn detect_line_ending(s: &str) -> Option<usize> {
     match s {
-        "\r\n" | "\r\u{0085}" => 2,
-        s if s.starts_with(is_start_line_ending) && s.len() == 1 => 1,
-        _ => 0,
+        "\r\n" | "\r\u{0085}" => Some(2),
+        s if s.starts_with(is_start_line_ending) => Some(1),
+        _ => None,
     }
 }
 
@@ -386,6 +391,7 @@ impl<'input> Lexer<'input> {
         self.lookahead.clear();
         self.chars.by_ref().dropping(n);
 
+        self.chars.reset_peek();
         if let Some(&(loc, c)) = self.chars.peek() {
             self.location = Some(loc);
             self.lookahead.push(c);
@@ -490,6 +496,25 @@ impl<'input> Lexer<'input> {
             };
 
             Some(self.expect_delimiter(|| Ok((idx0, Token::Identifier(Atom::from(slice)), idx1))))
+        } else if self.text[idx0..].starts_with("->") {
+            self.bump(2);
+
+            let (slice, idx1) = match self.bump_while(is_subsequent) {
+                Some(idx1) => (&self.text[idx0..idx1], idx1),
+                None => (&self.text[idx0..], self.text.len()),
+            };
+
+            Some(self.expect_delimiter(|| Ok((idx0, Token::Identifier(Atom::from(slice)), idx1))))
+        } else if self.lookahead.starts_with(is_start_peculiar) {
+            let (n, tok) = match &self.text[idx0..] {
+                s if s.starts_with("+") => (1, Token::Identifier(atom!("+"))),
+                s if s.starts_with("-") => (1, Token::Identifier(atom!("-"))),
+                s if s.starts_with("...") => (3, Token::Identifier(atom!("..."))),
+                _ => return Some(Err(Error::new(ErrorKind::ExpectedIdentifier, idx0))),
+            };
+
+            self.bump(n);
+            Some(self.expect_delimiter(|| Ok((idx0, tok, idx0 + n))))
         } else {
             None
         }
@@ -588,12 +613,160 @@ impl<'input> Lexer<'input> {
         }
     }
 
+    fn character(&mut self, idx0: usize) -> Option<Result<Spanned, Error>> {
+        fn detect(i: &str, s: &str, c: char) -> Option<(usize, char)> {
+            if i.starts_with(s) {
+                Some((s.len(), c))
+            } else {
+                None
+            }
+        }
+
+        if self.lookahead == r"#\" {
+            self.bump(2);
+
+            let sliced = &self.text[idx0 + 2..];
+            let maybe_length_and_char = detect(sliced, "nul", '\0')
+                .or_else(|| detect(sliced, "alarm", '\x07'))
+                .or_else(|| detect(sliced, "backspace", '\x08'))
+                .or_else(|| detect(sliced, "tab", '\t'))
+                .or_else(|| detect(sliced, "linefeed", '\n'))
+                .or_else(|| detect(sliced, "newline", '\n'))
+                .or_else(|| detect(sliced, "vtab", '\x0b'))
+                .or_else(|| detect(sliced, "page", '\x0c'))
+                .or_else(|| detect(sliced, "return", '\r'))
+                .or_else(|| detect(sliced, "esc", '\x1b'))
+                .or_else(|| detect(sliced, "space", ' '))
+                .or_else(|| detect(sliced, "delete", '\x7f'));
+
+            if let Some((n, c)) = maybe_length_and_char {
+                self.bump(n);
+                Some(Ok((idx0, Token::Character(c), idx0 + n)))
+            } else if self.lookahead.starts_with('x') {
+                let (slice, idx1) = match self.bump_while(|c| c.is_ascii_hexdigit()) {
+                    Some(idx1) => (&self.text[idx0..idx1], idx1),
+                    None => (&self.text[idx0..], self.text.len()),
+                };
+
+                match slice[3..].parse::<u32>() {
+                    Ok(n) => match char::from_u32(n) {
+                        Some(c) => Some(Ok((idx0, Token::Character(c), idx1))),
+                        None => Some(Err(Error::new(ErrorKind::InvalidCharacter(n), idx0))),
+                    },
+                    Err(e) => Some(Err(Error::new(ErrorKind::InvalidHexCode(e), idx0))),
+                }
+            } else {
+                match self.lookahead.chars().next() {
+                    Some(c) => {
+                        self.bump(1);
+                        Some(Ok((idx0, Token::Character(c), idx0 + c.len_utf8())))
+                    }
+                    None => Some(Err(Error::new(ErrorKind::ExpectedCharacter, idx0))),
+                }
+            }
+        } else {
+            None
+        }
+    }
+
+    fn string(&mut self, idx0: usize) -> Option<Result<Spanned, Error>> {
+        if self.lookahead.starts_with("\"") {
+            let mut loc = match self.bump(1) {
+                Some(loc) => loc,
+                None => return Some(Err(Error::new(ErrorKind::UnexpectedEof, idx0))),
+            };
+            let mut buf = String::new();
+
+            loop {
+                let idx1 = match self.bump_until(|c| c == '\"' || c == '\\') {
+                    Some(idx1) => idx1,
+                    None => return Some(Err(Error::new(ErrorKind::UnexpectedEof, idx0))),
+                };
+
+                buf.push_str(&self.text[loc..idx1]);
+                loc = idx1;
+
+                if self.lookahead.starts_with('\\') {
+                    if self.lookahead
+                        .ends_with(|c| is_intraline_whitespace(c) || is_start_line_ending(c))
+                    {
+                        self.bump(1);
+                        let break_loc = match self.bump_while(is_intraline_whitespace) {
+                            Some(break_loc) => break_loc,
+                            None => return Some(Err(Error::new(ErrorKind::UnexpectedEof, idx0))),
+                        };
+
+                        match detect_line_ending(&self.lookahead) {
+                            Some(n) => {
+                                self.bump(n);
+                            }
+                            None => {
+                                println!("oops {:?}", self.lookahead);
+
+                                return Some(Err(Error::new(
+                                    ErrorKind::ExpectedLineEnding,
+                                    break_loc,
+                                )))
+                            }
+                        }
+
+                        match self.bump_while(is_intraline_whitespace) {
+                            Some(idx1) => loc = idx1,
+                            None => return Some(Err(Error::new(ErrorKind::UnexpectedEof, idx0))),
+                        }
+                    } else if self.lookahead == r"\x" {
+                        unimplemented!();
+                    } else {
+                        let c = match &*self.lookahead {
+                            r#"\a"# => '\x07',
+                            r#"\b"# => '\x08',
+                            r#"\t"# => '\t',
+                            r#"\n"# => '\n',
+                            r#"\v"# => '\x0b',
+                            r#"\f"# => '\x0c',
+                            r#"\r"# => '\r',
+                            r#"\""# => '\"',
+                            r#"\\"# => '\\',
+                            _ => return Some(Err(Error::new(ErrorKind::UnrecognizedEscape, idx0))),
+                        };
+
+                        buf.push(c);
+
+                        match self.bump(2) {
+                            Some(idx1) => loc = idx1,
+                            None => return Some(Err(Error::new(ErrorKind::UnexpectedEof, idx0))),
+                        }
+                    }
+                } else if let Some(n) = detect_line_ending(&self.lookahead) {
+                    buf.push('\n');
+                    match self.bump(n) {
+                        Some(idx1) => loc = idx1,
+                        None => return Some(Err(Error::new(ErrorKind::UnexpectedEof, idx0))),
+                    }
+                } else if self.lookahead.starts_with('\"') {
+                    let idx1 = match self.bump(1) {
+                        Some(idx1) => idx1,
+                        None => self.text.len(),
+                    };
+
+                    return Some(Ok((idx0, Token::String(Atom::from(&*buf)), idx1)));
+                } else {
+                    unreachable!("lookahead must start with \" or \\");
+                }
+            }
+        } else {
+            None
+        }
+    }
+
     fn next_unshifted(&mut self) -> Option<Result<Spanned, Error>> {
         loop {
             let idx0 = match self.location {
                 Some(idx0) => idx0,
                 None => return None,
             };
+
+            println!("position {}", idx0);
 
             // interlexeme space
             {
@@ -614,11 +787,12 @@ impl<'input> Lexer<'input> {
                 }
             }
 
-            // simple lexemes
             return self.simple_lexemes(idx0)
-                .or_else(|| self.identifier(idx0))
                 .or_else(|| self.boolean(idx0))
                 .or_else(|| self.number(idx0))
+                .or_else(|| self.identifier(idx0)) // Must come after `number` to resolve peculiar identifier ambiguities
+                .or_else(|| self.character(idx0))
+                .or_else(|| self.string(idx0))
                 .or_else(|| Some(Err(Error::new(ErrorKind::UnrecognizedToken, idx0))));
         }
     }
@@ -642,6 +816,33 @@ impl<'input> Iterator for Lexer<'input> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn detects_line_endings() {
+        assert_eq!(detect_line_ending("\n"), Some(1));
+        assert_eq!(detect_line_ending("\n\t"), Some(1));
+        assert_eq!(detect_line_ending("\n "), Some(1));
+    }
+
+    #[test]
+    fn letter_is_valid_constituent() {
+        assert!(is_constituent('a'));
+    }
+
+    #[test]
+    fn dash_is_valid_subsequent() {
+        assert!(is_subsequent('-'));
+    }
+
+    #[test]
+    fn is_constituent_not_true_for_dq() {
+        assert!(!is_constituent('"'));
+    }
+
+    #[test]
+    fn is_initial_not_true_for_dq() {
+        assert!(!is_initial('"'));
+    }
 
     #[test]
     fn simple() {
@@ -669,6 +870,41 @@ mod tests {
                 QuasiSyntax,
                 Unsyntax,
                 UnsyntaxSplicing,
+            ]
+        );
+    }
+
+    #[test]
+    fn string() {
+        use self::Token::*;
+
+        let plain_string = "this is a string";
+
+        let multiline_string_raw = "this is a \\ \n\t  multiline string";
+        let multiline_string_cooked = "this is a multiline string";
+
+        let input = &[plain_string, multiline_string_raw]
+            .iter()
+            .map(|s| format!("\"{}\"", s))
+            .join("\n");
+
+        let lexer = Lexer::new(&input, 0);
+        let tokens = match lexer
+            .inspect(|t| println!("T-T-TOKENIZED: {:?}", t))
+            .map(|r| r.map(|t| t.1))
+            .collect::<Result<Vec<_>, _>>()
+        {
+            Ok(tokens) => tokens,
+            Err(err) => {
+                let nearby = &input[err.location..];
+                panic!("failed to lex, errored with {:?} on input of length {}:\n{}\nstarting from error position:\n{}", err, input.len(), input, nearby);
+            }
+        };
+        assert_eq!(
+            tokens,
+            vec![
+                String(Atom::from(plain_string)),
+                String(Atom::from(multiline_string_cooked)),
             ]
         );
     }
@@ -720,6 +956,7 @@ mod tests {
     lex_test_files! {
         pass {
             hofstadter,
+            string,
         }
     }
 }
