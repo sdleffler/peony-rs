@@ -3,8 +3,9 @@
 use failure::*;
 use lalrpop_util::ParseError;
 use num::{BigInt, BigUint, BigRational, FromPrimitive, Num, One, ToPrimitive, Zero, pow::pow};
+use ast::{Number, Precision, Sign, NanInf, UReal, Real};
+use parser::lexer::NumberFlags;
 use parser::lexer::number_lexer::{self, Error, ErrorKind};
-use parser::lexer::{Number, Precision, Sign, NumberFlags, NanInf, UReal, Real};
 #[allow(unused_extern_crates)]
 extern crate lalrpop_util as __lalrpop_util;
 
@@ -14,8 +15,9 @@ mod __parse__Number {
     use failure::*;
     use lalrpop_util::ParseError;
     use num::{BigInt, BigUint, BigRational, FromPrimitive, Num, One, ToPrimitive, Zero, pow::pow};
+    use ast::{Number, Precision, Sign, NanInf, UReal, Real};
+    use parser::lexer::NumberFlags;
     use parser::lexer::number_lexer::{self, Error, ErrorKind};
-    use parser::lexer::{Number, Precision, Sign, NumberFlags, NanInf, UReal, Real};
     #[allow(unused_extern_crates)]
     extern crate lalrpop_util as __lalrpop_util;
     use super::__ToTriple;
@@ -1267,8 +1269,9 @@ mod __parse__SpannedNumber {
     use failure::*;
     use lalrpop_util::ParseError;
     use num::{BigInt, BigUint, BigRational, FromPrimitive, Num, One, ToPrimitive, Zero, pow::pow};
+    use ast::{Number, Precision, Sign, NanInf, UReal, Real};
+    use parser::lexer::NumberFlags;
     use parser::lexer::number_lexer::{self, Error, ErrorKind};
-    use parser::lexer::{Number, Precision, Sign, NumberFlags, NanInf, UReal, Real};
     #[allow(unused_extern_crates)]
     extern crate lalrpop_util as __lalrpop_util;
     use super::__ToTriple;

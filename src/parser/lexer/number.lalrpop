@@ -2,8 +2,9 @@ use failure::*;
 use lalrpop_util::ParseError;
 use num::{BigInt, BigUint, BigRational, FromPrimitive, Num, One, ToPrimitive, Zero, pow::pow};
 
+use ast::{Number, Precision, Sign, NanInf, UReal, Real};
+use parser::lexer::NumberFlags;
 use parser::lexer::number_lexer::{self, Error, ErrorKind};
-use parser::lexer::{Number, Precision, Sign, NumberFlags, NanInf, UReal, Real};
 
 grammar<'input>(flags: &NumberFlags);
 

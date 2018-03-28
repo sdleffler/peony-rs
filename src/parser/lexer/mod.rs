@@ -8,6 +8,7 @@ use num::{BigInt, BigRational, BigUint};
 use regex::{Regex, RegexSet};
 use unicode_categories::UnicodeCategories;
 
+use ast::Number;
 use atom::Atom;
 
 use self::number_lexer::Lexer as NumberLexer;
@@ -76,7 +77,7 @@ fn detect_line_ending(s: &str) -> Option<usize> {
     }
 }
 
-pub type Spanned = (usize, Token, usize);
+pub type Spanned = (usize, Tok, usize);
 
 #[derive(Debug, Fail)]
 pub enum ErrorKind {
@@ -87,7 +88,7 @@ pub enum ErrorKind {
     ExpectedIdentifier,
 
     #[fail(display = "unrecognized token")]
-    UnrecognizedToken,
+    UnrecognizedTok,
 
     #[fail(display = "expected end of nested comment ({} levels deep)", _0)]
     ExpectedEndOfNestedComment(u8),
@@ -131,63 +132,12 @@ impl Error {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash)]
-pub enum Precision {
-    Single,
-    Double,
-}
-
-impl Default for Precision {
-    fn default() -> Self {
-        Precision::Double
-    }
-}
-
-#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash)]
-pub enum UReal {
-    Integer(BigUint),
-    Rational(BigUint, BigUint),
-    Decimal(Precision, BigUint, isize),
-}
-
-#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash)]
-pub enum Sign {
-    Pos,
-    Neg,
-}
-
-impl Default for Sign {
-    fn default() -> Self {
-        Sign::Pos
-    }
-}
-
-#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash)]
-pub enum NanInf {
-    Nan,
-    Inf,
-}
-
-#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash)]
-pub enum Real {
-    Signed(Sign, UReal),
-    NanInf(Sign, NanInf),
-}
-
-#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash)]
-pub enum Number {
-    Real(Real),
-    Complex(Real, Real),
-}
-
-#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash)]
-pub enum Token {
+pub enum Tok {
     Identifier(Atom),
     Number(Number),
     Character(char),
     String(Atom),
-
-    True,  // #t/#T
-    False, // #f/#F
+    Boolean(bool),
 
     LParen, // (
     RParen, // )
@@ -209,121 +159,6 @@ pub enum Token {
     Unsyntax,         // #,
     UnsyntaxSplicing, // #,@
 }
-
-// fn identifier<'input>(text: &'input str, idx0: usize) -> Result<Spanned, Error> {
-//     let check_unpeculiar = match text {
-//         "+" | "-" | "..." => {
-//             return Ok((idx0, Token::Identifier(Atom::from(text)), idx0 + text.len()))
-//         }
-//
-//         s if s.starts_with("->") => &s[2..],
-//         s => s,
-//     };
-//
-//     let mut chars = check_unpeculiar.chars();
-//     match chars.next() {
-//         Some(c) if is_initial(c) => match chars.find(|&c| !is_subsequent(c)) {
-//             None => Ok((idx0, Token::Identifier(Atom::from(text)), idx0 + text.len())),
-//             Some(c) => return Err(Error::new(ErrorKind::InvalidIdentifierCont(c), idx0)),
-//         },
-//         Some(c) => return Err(Error::new(ErrorKind::InvalidIdentifierStart(c), idx0)),
-//         None => return Err(Error::new(ErrorKind::ExpectedIdentifier, idx0)),
-//     }
-// }
-//
-// fn boolean<'input>(text: &'input str, idx0: usize) -> Result<Spanned, Error> {
-//     lazy_static! {
-//         static ref BOOL_SET: RegexSet = RegexSet::new(&[
-//             r"^(#f|#F)$",
-//             r"^(#t|#T)$",
-//         ]).unwrap();
-//     }
-//
-//     let token = match BOOL_SET.matches(text).into_iter().next() {
-//         Some(0) => Token::False,
-//         Some(1) => Token::True,
-//         Some(_) => unreachable!(),
-//         None => return Err(Error::new(ErrorKind::ExpectedBoolean, idx0)),
-//     };
-//
-//     Ok((idx0, token, idx0 + text.len()))
-// }
-//
-// fn number<'input>(text: &'input str, idx0: usize) -> Result<Spanned, Error> {
-//     lazy_static! {
-//         static ref PREFIX_SET: RegexSet = RegexSet::new(&[
-//             r"#[bB]",         // radix 2
-//             r"#[oO]",         // radix 8
-//             r"#[dD]",         // radix 10
-//             r"#[xX]",         // radix 16
-//             r"#[iI]",         // inexact
-//             r"#[eE]",         // exact
-//         ]).unwrap();
-//
-//         static ref COMPLEX_SET: RegexSet = RegexSet::new(&[
-//             r"^[^@]+@[^@]+$", // n@m
-//             r"i$",            // other complex
-//         ]).unwrap();
-//     }
-//
-//     let prefix_matches = PREFIX_SET.matches(text);
-//     match COMPLEX_SET.matches(text).into_iter().next() {
-//         Some(0) => unimplemented!(),
-//         Some(1) => unimplemented!(),
-//         Some(_) => unreachable!(),
-//         None => unimplemented!(),
-//     }
-// }
-//
-// fn character<'input>(text: &'input str, idx0: usize) -> Result<Spanned, Error> {
-//     lazy_static! {
-//         static ref RE_SET: RegexSet = RegexSet::new(&[
-//             r"^nul$",
-//             r"^alarm$",
-//             r"^backspace$",
-//             r"^tab$",
-//             r"^(linefeed|newline)$",
-//             r"^vtab$",
-//             r"^page$",
-//             r"^return$",
-//             r"^esc$",
-//             r"^space$",
-//             r"^delete$",
-//             r"^x[[:xdigit:]]+$",
-//             r"^.$",
-//         ]).unwrap();
-//     }
-//
-//     if !text.starts_with(r"#\") {
-//         Err(Error::new(ErrorKind::ExpectedCharacter, idx0))
-//     } else {
-//         let code = &text[2..];
-//         let character = match RE_SET.matches(code).into_iter().next() {
-//             Some(0) => '\0',                                     // nul
-//             Some(1) => '\x07',                                   // alarm
-//             Some(2) => '\x08',                                   // backspace
-//             Some(3) => '\t',                                     // tab
-//             Some(4) => '\n',                                     // (linefeed|newline)
-//             Some(5) => '\x0b',                                   // vtab
-//             Some(6) => '\x0c',                                   // page
-//             Some(7) => '\r',                                     // return
-//             Some(8) => unimplemented!("what the fuck is this?"), // esc
-//             Some(9) => ' ',                                      // space
-//             Some(10) => '\x7f',                                  // delete
-//             Some(11) => {
-//                 // hex scalar
-//                 let scalar = u32::from_str_radix(&code[3..], 16)
-//                     .map_err(|e| Error::new(ErrorKind::InvalidHexCode(e), idx0))?;
-//                 char::from_u32(scalar)
-//                     .ok_or_else(|| Error::new(ErrorKind::InvalidCharacter(scalar), idx0))?
-//             }
-//             Some(12) => code.chars().next().unwrap(),
-//             Some(_) => unreachable!(),
-//             None => return Err(Error::new(ErrorKind::ExpectedCharacterCont, idx0 + 2)),
-//         };
-//         Ok((idx0, Token::Character(character), idx0 + text.len()))
-//     }
-// }
 
 enum NumberRadix {
     Radix2,
@@ -429,28 +264,28 @@ impl<'input> Lexer<'input> {
 
     fn simple_lexemes(&mut self, idx0: usize) -> Option<Result<Spanned, Error>> {
         let maybe_length_and_token = match &self.text[idx0..] {
-            s if s.starts_with("#vu8(") => Some((5, Token::ByteVectorOpen)),
-            s if s.starts_with("#,@") => Some((3, Token::UnsyntaxSplicing)),
-            s if s.starts_with("#`") => Some((2, Token::QuasiSyntax)),
-            s if s.starts_with("#'") => Some((2, Token::Syntax)),
-            s if s.starts_with(",@") => Some((2, Token::UnquoteSplicing)),
-            s if s.starts_with("#,") => Some((2, Token::Unsyntax)),
-            s if s.starts_with("#(") => Some((2, Token::VectorOpen)),
-            s if s.starts_with('(') => Some((1, Token::LParen)),
-            s if s.starts_with(')') => Some((1, Token::RParen)),
-            s if s.starts_with('[') => Some((1, Token::LBrack)),
-            s if s.starts_with(']') => Some((1, Token::RBrack)),
-            s if s.starts_with('\'') => Some((1, Token::Quote)),
-            s if s.starts_with('`') => Some((1, Token::QuasiQuote)),
-            s if s.starts_with(',') => Some((1, Token::Unquote)),
-            s if s.starts_with('.') => Some((1, Token::Dot)),
+            s if s.starts_with("#vu8(") => Some((5, Tok::ByteVectorOpen)),
+            s if s.starts_with("#,@") => Some((3, Tok::UnsyntaxSplicing)),
+            s if s.starts_with("#`") => Some((2, Tok::QuasiSyntax)),
+            s if s.starts_with("#'") => Some((2, Tok::Syntax)),
+            s if s.starts_with(",@") => Some((2, Tok::UnquoteSplicing)),
+            s if s.starts_with("#,") => Some((2, Tok::Unsyntax)),
+            s if s.starts_with("#(") => Some((2, Tok::VectorOpen)),
+            s if s.starts_with('(') => Some((1, Tok::LParen)),
+            s if s.starts_with(')') => Some((1, Tok::RParen)),
+            s if s.starts_with('[') => Some((1, Tok::LBrack)),
+            s if s.starts_with(']') => Some((1, Tok::RBrack)),
+            s if s.starts_with('\'') => Some((1, Tok::Quote)),
+            s if s.starts_with('`') => Some((1, Tok::QuasiQuote)),
+            s if s.starts_with(',') => Some((1, Tok::Unquote)),
+            s if s.starts_with('.') => Some((1, Tok::Dot)),
             _ => None,
         };
 
         maybe_length_and_token.map(|(n, tok)| {
             self.bump(n);
             match tok {
-                Token::Dot => self.expect_delimiter(|| Ok((idx0, tok, idx0 + n))), // `.` must be followed by a delimiter
+                Tok::Dot => self.expect_delimiter(|| Ok((idx0, tok, idx0 + n))), // `.` must be followed by a delimiter
                 _ => Ok((idx0, tok, idx0 + n)),
             }
         })
@@ -463,7 +298,7 @@ impl<'input> Lexer<'input> {
                 None => (&self.text[idx0..], self.text.len()),
             };
 
-            Some(self.expect_delimiter(|| Ok((idx0, Token::Identifier(Atom::from(slice)), idx1))))
+            Some(self.expect_delimiter(|| Ok((idx0, Tok::Identifier(Atom::from(slice)), idx1))))
         } else if self.text[idx0..].starts_with("->") {
             self.bump(2);
 
@@ -472,12 +307,12 @@ impl<'input> Lexer<'input> {
                 None => (&self.text[idx0..], self.text.len()),
             };
 
-            Some(self.expect_delimiter(|| Ok((idx0, Token::Identifier(Atom::from(slice)), idx1))))
+            Some(self.expect_delimiter(|| Ok((idx0, Tok::Identifier(Atom::from(slice)), idx1))))
         } else if self.lookahead.starts_with(is_start_peculiar) {
             let (n, tok) = match &self.text[idx0..] {
-                s if s.starts_with("+") => (1, Token::Identifier(atom!("+"))),
-                s if s.starts_with("-") => (1, Token::Identifier(atom!("-"))),
-                s if s.starts_with("...") => (3, Token::Identifier(atom!("..."))),
+                s if s.starts_with("+") => (1, Tok::Identifier(atom!("+"))),
+                s if s.starts_with("-") => (1, Tok::Identifier(atom!("-"))),
+                s if s.starts_with("...") => (3, Tok::Identifier(atom!("..."))),
                 _ => return Some(Err(Error::new(ErrorKind::ExpectedIdentifier, idx0))),
             };
 
@@ -492,8 +327,8 @@ impl<'input> Lexer<'input> {
         match &*self.lookahead {
             "#t" | "#T" | "#f" | "#F" => {
                 let token = match &*self.lookahead {
-                    "#t" | "#T" => Token::True,
-                    "#f" | "#F" => Token::False,
+                    "#t" | "#T" => Tok::Boolean(true),
+                    "#f" | "#F" => Tok::Boolean(false),
                     _ => unreachable!(),
                 };
                 self.bump(2);
@@ -515,7 +350,7 @@ impl<'input> Lexer<'input> {
 
         let number_lexer = NumberLexer::new(slice, idx0, number_flags.to_radix());
         match number::SpannedNumberParser::new().parse(&number_flags, number_lexer) {
-            Ok((idx0, number, idx1)) => Some(Ok((idx0, Token::Number(number), idx1))),
+            Ok((idx0, number, idx1)) => Some(Ok((idx0, Tok::Number(number), idx1))),
             Err(err) => unimplemented!("o fuck: {:?}", err),
         }
     }
@@ -609,7 +444,7 @@ impl<'input> Lexer<'input> {
 
             if let Some((n, c)) = maybe_length_and_char {
                 self.bump(n);
-                Some(Ok((idx0, Token::Character(c), idx0 + n)))
+                Some(Ok((idx0, Tok::Character(c), idx0 + n)))
             } else if self.lookahead.starts_with('x') {
                 let (slice, idx1) = match self.bump_while(|c| c.is_ascii_hexdigit()) {
                     Some(idx1) => (&self.text[idx0..idx1], idx1),
@@ -618,7 +453,7 @@ impl<'input> Lexer<'input> {
 
                 match slice[3..].parse::<u32>() {
                     Ok(n) => match char::from_u32(n) {
-                        Some(c) => Some(Ok((idx0, Token::Character(c), idx1))),
+                        Some(c) => Some(Ok((idx0, Tok::Character(c), idx1))),
                         None => Some(Err(Error::new(ErrorKind::InvalidCharacter(n), idx0))),
                     },
                     Err(e) => Some(Err(Error::new(ErrorKind::InvalidHexCode(e), idx0))),
@@ -627,7 +462,7 @@ impl<'input> Lexer<'input> {
                 match self.lookahead.chars().next() {
                     Some(c) => {
                         self.bump(1);
-                        Some(Ok((idx0, Token::Character(c), idx0 + c.len_utf8())))
+                        Some(Ok((idx0, Tok::Character(c), idx0 + c.len_utf8())))
                     }
                     None => Some(Err(Error::new(ErrorKind::ExpectedCharacter, idx0))),
                 }
@@ -739,7 +574,7 @@ impl<'input> Lexer<'input> {
                         None => self.text.len(),
                     };
 
-                    return Some(Ok((idx0, Token::String(Atom::from(&*buf)), idx1)));
+                    return Some(Ok((idx0, Tok::String(Atom::from(&*buf)), idx1)));
                 } else {
                     unreachable!("lookahead must start with \" or \\");
                 }
@@ -781,7 +616,7 @@ impl<'input> Lexer<'input> {
                 .or_else(|| self.identifier(idx0)) // Must come after `number` to resolve peculiar identifier ambiguities
                 .or_else(|| self.character(idx0))
                 .or_else(|| self.string(idx0))
-                .or_else(|| Some(Err(Error::new(ErrorKind::UnrecognizedToken, idx0))));
+                .or_else(|| Some(Err(Error::new(ErrorKind::UnrecognizedTok, idx0))));
         }
     }
 }
@@ -834,7 +669,7 @@ mod tests {
 
     #[test]
     fn simple() {
-        use self::Token::*;
+        use self::Tok::*;
 
         let lexer = Lexer::new("()[]#(#vu8('`,,@.#'#`#,#,@", 0);
         assert_eq!(
@@ -864,7 +699,7 @@ mod tests {
 
     #[test]
     fn string() {
-        use self::Token::*;
+        use self::Tok::*;
 
         let plain_string = "this is a string";
 
@@ -887,10 +722,7 @@ mod tests {
             .join("\n");
 
         let lexer = Lexer::new(&input, 0);
-        let tokens = match lexer
-            .map(|r| r.map(|t| t.1))
-            .collect::<Result<Vec<_>, _>>()
-        {
+        let tokens = match lexer.map(|r| r.map(|t| t.1)).collect::<Result<Vec<_>, _>>() {
             Ok(tokens) => tokens,
             Err(err) => {
                 let nearby = &input[err.location..];

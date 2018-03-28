@@ -1,8 +1,41 @@
 use num::BigRational;
 
+use ast::Number;
 use atom::Atom;
 use parser::lexer;
 
 grammar;
+
+extern {
+    type Location = usize;
+    type Error = lexer::Error;
+
+    enum lexer::Tok {
+        "identifier" => lexer::Tok::Identifier(<Atom>),
+        "number" => lexer::Tok::Number(<Number>),
+        "character" => lexer::Tok::Character(<char>),
+        "string" => lexer::Tok::String(<Atom>),
+        "boolean" => lexer::Tok::Boolean(<bool>),
+
+        "(" => lexer::Tok::LParen,
+        ")" => lexer::Tok::RParen,
+        "[" => lexer::Tok::LBrack,
+        "]" => lexer::Tok::RBrack,
+
+        "." => lexer::Tok::Dot,
+
+        "#(" => lexer::Tok::VectorOpen,
+        "#u8(" => lexer::Tok::ByteVectorOpen,
+        "'" => lexer::Tok::Quote,
+        "`" => lexer::Tok::QuasiQuote,
+        "," => lexer::Tok::Unquote,
+        ",@" => lexer::Tok::UnquoteSplicing,
+
+        "#'" => lexer::Tok::Syntax,
+        "#`" => lexer::Tok::QuasiSyntax,
+        "#," => lexer::Tok::Unsyntax,
+        "#,@" => lexer::Tok::UnsyntaxSplicing,
+    }
+}
 
 pub Identifier: () = => ();
