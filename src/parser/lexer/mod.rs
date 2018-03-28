@@ -871,12 +871,16 @@ mod tests {
         let multiline_string_raw = "this is a \\ \n\t  multiline string";
         let multiline_string_cooked = "this is a multiline string";
 
+        let string_with_escape_raw = "this is a string\\twith an escape";
+        let string_with_escape_cooked = "this is a string\twith an escape";
+
         let string_with_hex_escape_raw = "this is a string \\x77ith an escape!";
         let string_with_hex_escape_cooked = "this is a string with an escape!";
 
         let input = &[
             plain_string,
             multiline_string_raw,
+            string_with_escape_raw,
             string_with_hex_escape_raw,
         ].iter()
             .map(|s| format!("\"{}\"", s))
@@ -898,6 +902,7 @@ mod tests {
             vec![
                 String(Atom::from(plain_string)),
                 String(Atom::from(multiline_string_cooked)),
+                String(Atom::from(string_with_escape_cooked)),
                 String(Atom::from(string_with_hex_escape_cooked)),
             ]
         );
