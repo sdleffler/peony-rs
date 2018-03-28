@@ -1,0 +1,28 @@
+[package]
+authors = ["Sean Leffler <sean@errno.com>"]
+build = "build.rs"
+name = "garden"
+version = "0.1.0"
+
+[build-dependencies]
+lalrpop = "0.15.0"
+string_cache_codegen = "0.4.0"
+
+[dependencies]
+failure = "0.1.1"
+failure_derive = "0.1.1"
+itertools = "0.7.8"
+lalrpop-util = "0.15.0"
+lazy_static = "1.0.0"
+nom = "3.2.1"
+nom_locate = "0.1.1"
+num = "0.1.42"
+string_cache = "0.7.1"
+unicode_categories = "0.1.1"
+
+[dependencies.peony]
+git = "https://github.com/sdleffler/peony-rs"
+
+[dependencies.regex]
+features = ["pattern"]
+version = "0.2.10"

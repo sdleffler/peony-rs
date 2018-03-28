@@ -1,0 +1,116 @@
+use failure::*;
+use lalrpop_util::ParseError;
+use num::{BigInt, BigUint, BigRational, FromPrimitive, Num, One, ToPrimitive, Zero, pow::pow};
+
+use parser::lexer::number_lexer::{self, Error, ErrorKind};
+use parser::lexer::{Number, Precision, Sign, NumberFlags, NanInf, UReal, Real};
+
+grammar<'input>(flags: &NumberFlags);
+
+extern {
+    type Location = usize;
+    type Error = number_lexer::Error;
+
+    enum number_lexer::Tok<'input> {
+        "digits" => number_lexer::Tok::Digits(<&'input str>),
+
+        "E" => number_lexer::Tok::Exponent,
+        "S" => number_lexer::Tok::ExponentShort,
+        "F" => number_lexer::Tok::ExponentFloat,
+        "D" => number_lexer::Tok::ExponentDouble,
+        "L" => number_lexer::Tok::ExponentLong,
+
+        "mantissa width" => number_lexer::Tok::MantissaWidth(<&'input str>),
+
+        "-" => number_lexer::Tok::Minus,
+        "+" => number_lexer::Tok::Plus,
+
+        "." => number_lexer::Tok::Point,
+
+        "@" => number_lexer::Tok::At,
+        "/" => number_lexer::Tok::Slash,
+
+        "nan.0" => number_lexer::Tok::Nan,
+        "inf.0" => number_lexer::Tok::Inf,
+
+        "i" => number_lexer::Tok::I,
+    }
+}
+
+pub Number: Number = {
+    <Real> => Number::Real(<>),
+    <Real> "@" <Real> => Number::Complex(<>),
+    <a:Real> <s:Sign> <b:UReal> "i" => Number::Complex(a, Real::Signed(s, b)),
+    <a:Real> <s:Sign> <b:NanInf> "i" => Number::Complex(a, Real::NanInf(s, b)),
+    <a:Real> <s:Sign> "i" => Number::Complex(a, Real::Signed(s, UReal::Integer(BigUint::one()))),
+    <s:Sign> <b:UReal> "i" => Number::Complex(Real::Signed(Sign::Pos, UReal::Integer(BigUint::zero())), Real::Signed(s, b)),
+    <s:Sign> <b:NanInf> "i" => Number::Complex(Real::Signed(Sign::Pos, UReal::Integer(BigUint::zero())), Real::NanInf(s, b)),
+    <s:Sign> "i" => Number::Complex(Real::Signed(Sign::Pos, UReal::Integer(BigUint::zero())), Real::Signed(s, UReal::Integer(BigUint::one()))),
+};
+
+Real: Real = {
+    <s:Sign?> <u:UReal> => Real::Signed(s.unwrap_or_default(), u),
+    <s:Sign> <n:NanInf> => Real::NanInf(s, n),
+};
+
+UReal: UReal = {
+    <n:UInteger> <d:("/" <UInteger>)?> => match d {
+        Some(d) => UReal::Rational(n, d),
+        None => UReal::Integer(n),
+    },
+    <loc:@L> <d:Decimal> <m:"mantissa width"?> =>? {
+        if let Some(_) = m {
+            // TODO warn that mantissa width is ignored
+        }
+
+        let (p, i, m, e) = d;
+        let n = BigUint::from_str_radix(&(i.to_owned() + m), 10)
+            .map_err(|e| ParseError::User { error: Error::new(ErrorKind::ParseBigUintError(e), loc) })?;
+        let e_offset = m.trim_right_matches('0').len() as isize;
+
+        Ok(UReal::Decimal(p, n, e - e_offset))
+    },
+};
+
+UInteger: BigUint = <loc: @L> <d:"digits"> =>? BigUint::from_str_radix(d, flags.to_radix())
+    .map_err(|e| ParseError::User { error: Error::new(ErrorKind::ParseBigUintError(e), loc) });
+
+Decimal: (Precision, &'input str, &'input str, isize) = {
+    <d:"digits"> <s:Suffix> => (s.0, d, "", s.1),
+    "." <d:"digits"> <s:Suffix?> => { let s = s.unwrap_or_default(); (s.0, "", d, s.1) },
+    <d:"digits"> "." <s:Suffix?> => { let s = s.unwrap_or_default(); (s.0, d, "", s.1) },
+    <d:"digits"> "." <p:"digits"> <s:Suffix?> => { let s = s.unwrap_or_default(); (s.0, d, p, s.1) },
+};
+
+Suffix: (Precision, isize) = {
+    <marker:ExponentMarker> <sign:Sign?> <loc: @L> <exp:"digits"> =>? {
+        let e = exp.parse::<isize>()
+            .map_err(|err| ParseError::User {
+                error: Error::new(ErrorKind::ParseIntError(err), loc),
+            })?;
+        let signed_e = match sign {
+            Some(Sign::Neg) => -e,
+            _ => e,
+        };
+
+        Ok((marker, signed_e))
+    },
+};
+
+ExponentMarker: Precision = {
+    "E" => Precision::Double,
+    "S" => Precision::Single,
+    "F" => Precision::Single,
+    "D" => Precision::Double,
+    "L" => Precision::Double,
+};
+
+Sign: Sign = {
+    "+" => Sign::Pos,
+    "-" => Sign::Neg,
+};
+
+NanInf: NanInf = {
+    "nan.0" => NanInf::Nan,
+    "inf.0" => NanInf::Inf,
+};
