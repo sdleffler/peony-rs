@@ -1,7 +1,7 @@
 [package]
 authors = ["Sean Leffler <sean@errno.com>"]
 build = "build.rs"
-name = "garden"
+name = "peony"
 version = "0.1.0"
 
 [build-dependencies]
@@ -20,8 +20,8 @@ num = "0.1.42"
 string_cache = "0.7.1"
 unicode_categories = "0.1.1"
 
-[dependencies.peony]
-git = "https://github.com/sdleffler/peony-rs"
+[dependencies.garden]
+git = "https://github.com/sdleffler/garden-rs"
 
 [dependencies.regex]
 features = ["pattern"]
