@@ -4,7 +4,7 @@ mod number_lexer;
 use std::{char, num::ParseIntError, str::CharIndices};
 
 use itertools::{self, Itertools, MultiPeek};
-use num::{BigInt, BigUint, BigRational};
+use num::{BigInt, BigRational, BigUint};
 use regex::{Regex, RegexSet};
 use unicode_categories::UnicodeCategories;
 
@@ -69,26 +69,10 @@ fn detect_line_ending(s: &str) -> usize {
     }
 }
 
-// lazy_static! {
-//     static ref UNPECULIAR_IDENTIFIER: Regex = Regex::new(
-//         r"(?:[!$%&*/:<=>?^_~\pL\p{Mn}\p{Nl}\p{No}\p{Pc}\p{Pd}\p{Po}\pS\p{Co}]|\x[[:xdigit:]]+)\
-//           (?:[!$%&*/:<=>?^_~\pL\pMn\pN\p{Pc}\p{Pd}\p{Po}\pS\p{Co}+.@-]|\x[[:xdigit:]]+)*",
-//     ).unwrap();
-//
-//     static ref PECULIAR_IDENTIFIER: Regex = Regex::new(
-//         r"(?:[+-]|\.{3}|->(?:[!$%&*/:<=>?^_~\pL\pMn\pN\p{Pc}\p{Pd}\p{Po}\pS\p{Co}+.@-]|\x[[:xdigit:]]+)*)",
-//     ).unwrap();
-//
-//     static ref BOOLEAN: RegexSet = RegexSet::new(&[
-//         r"(?:#f|#F)",
-//         r"(?:#t|#T)",
-//     ]).unwrap();
-// }
-//
 pub type Spanned = (usize, Token, usize);
 
 #[derive(Debug, Fail)]
-pub enum LexErrorKind {
+pub enum ErrorKind {
     #[fail(display = "expected a delimiter")]
     ExpectedDelimiter,
 
@@ -143,13 +127,13 @@ pub enum LexErrorKind {
 
 #[derive(Debug, Fail)]
 #[fail(display = "o no")]
-pub struct LexError {
+pub struct Error {
     pub location: usize,
-    pub kind: LexErrorKind,
+    pub kind: ErrorKind,
 }
 
-impl LexError {
-    pub fn new(kind: LexErrorKind, location: usize) -> Self {
+impl Error {
+    pub fn new(kind: ErrorKind, location: usize) -> Self {
         Self { location, kind }
     }
 }
@@ -234,7 +218,7 @@ pub enum Token {
     UnsyntaxSplicing, // #,@
 }
 
-// fn identifier<'input>(text: &'input str, idx0: usize) -> Result<Spanned, LexError> {
+// fn identifier<'input>(text: &'input str, idx0: usize) -> Result<Spanned, Error> {
 //     let check_unpeculiar = match text {
 //         "+" | "-" | "..." => {
 //             return Ok((idx0, Token::Identifier(Atom::from(text)), idx0 + text.len()))
@@ -248,14 +232,14 @@ pub enum Token {
 //     match chars.next() {
 //         Some(c) if is_initial(c) => match chars.find(|&c| !is_subsequent(c)) {
 //             None => Ok((idx0, Token::Identifier(Atom::from(text)), idx0 + text.len())),
-//             Some(c) => return Err(LexError::new(LexErrorKind::InvalidIdentifierCont(c), idx0)),
+//             Some(c) => return Err(Error::new(ErrorKind::InvalidIdentifierCont(c), idx0)),
 //         },
-//         Some(c) => return Err(LexError::new(LexErrorKind::InvalidIdentifierStart(c), idx0)),
-//         None => return Err(LexError::new(LexErrorKind::ExpectedIdentifier, idx0)),
+//         Some(c) => return Err(Error::new(ErrorKind::InvalidIdentifierStart(c), idx0)),
+//         None => return Err(Error::new(ErrorKind::ExpectedIdentifier, idx0)),
 //     }
 // }
 //
-// fn boolean<'input>(text: &'input str, idx0: usize) -> Result<Spanned, LexError> {
+// fn boolean<'input>(text: &'input str, idx0: usize) -> Result<Spanned, Error> {
 //     lazy_static! {
 //         static ref BOOL_SET: RegexSet = RegexSet::new(&[
 //             r"^(#f|#F)$",
@@ -267,13 +251,13 @@ pub enum Token {
 //         Some(0) => Token::False,
 //         Some(1) => Token::True,
 //         Some(_) => unreachable!(),
-//         None => return Err(LexError::new(LexErrorKind::ExpectedBoolean, idx0)),
+//         None => return Err(Error::new(ErrorKind::ExpectedBoolean, idx0)),
 //     };
 //
 //     Ok((idx0, token, idx0 + text.len()))
 // }
 //
-// fn number<'input>(text: &'input str, idx0: usize) -> Result<Spanned, LexError> {
+// fn number<'input>(text: &'input str, idx0: usize) -> Result<Spanned, Error> {
 //     lazy_static! {
 //         static ref PREFIX_SET: RegexSet = RegexSet::new(&[
 //             r"#[bB]",         // radix 2
@@ -299,7 +283,7 @@ pub enum Token {
 //     }
 // }
 //
-// fn character<'input>(text: &'input str, idx0: usize) -> Result<Spanned, LexError> {
+// fn character<'input>(text: &'input str, idx0: usize) -> Result<Spanned, Error> {
 //     lazy_static! {
 //         static ref RE_SET: RegexSet = RegexSet::new(&[
 //             r"^nul$",
@@ -319,7 +303,7 @@ pub enum Token {
 //     }
 //
 //     if !text.starts_with(r"#\") {
-//         Err(LexError::new(LexErrorKind::ExpectedCharacter, idx0))
+//         Err(Error::new(ErrorKind::ExpectedCharacter, idx0))
 //     } else {
 //         let code = &text[2..];
 //         let character = match RE_SET.matches(code).into_iter().next() {
@@ -337,13 +321,13 @@ pub enum Token {
 //             Some(11) => {
 //                 // hex scalar
 //                 let scalar = u32::from_str_radix(&code[3..], 16)
-//                     .map_err(|e| LexError::new(LexErrorKind::InvalidHexCode(e), idx0))?;
+//                     .map_err(|e| Error::new(ErrorKind::InvalidHexCode(e), idx0))?;
 //                 char::from_u32(scalar)
-//                     .ok_or_else(|| LexError::new(LexErrorKind::InvalidCharacter(scalar), idx0))?
+//                     .ok_or_else(|| Error::new(ErrorKind::InvalidCharacter(scalar), idx0))?
 //             }
 //             Some(12) => code.chars().next().unwrap(),
 //             Some(_) => unreachable!(),
-//             None => return Err(LexError::new(LexErrorKind::ExpectedCharacterCont, idx0 + 2)),
+//             None => return Err(Error::new(ErrorKind::ExpectedCharacterCont, idx0 + 2)),
 //         };
 //         Ok((idx0, Token::Character(character), idx0 + text.len()))
 //     }
@@ -438,19 +422,19 @@ impl<'input> Lexer<'input> {
         }
     }
 
-    fn expect_delimiter<F: FnOnce() -> Result<Spanned, LexError>>(
+    fn expect_delimiter<F: FnOnce() -> Result<Spanned, Error>>(
         &self,
         thunk: F,
-    ) -> Result<Spanned, LexError> {
+    ) -> Result<Spanned, Error> {
         if self.lookahead.starts_with(is_delimiter) {
             thunk()
         } else {
             let idx0 = self.location.unwrap_or(self.text.len());
-            Err(LexError::new(LexErrorKind::ExpectedDelimiter, idx0))
+            Err(Error::new(ErrorKind::ExpectedDelimiter, idx0))
         }
     }
 
-    fn simple_lexemes(&mut self, idx0: usize) -> Option<Result<Spanned, LexError>> {
+    fn simple_lexemes(&mut self, idx0: usize) -> Option<Result<Spanned, Error>> {
         let maybe_length_and_token = match &self.text[idx0..] {
             s if s.starts_with("#vu8(") => Some((5, Token::ByteVectorOpen)),
             s if s.starts_with("#,@") => Some((3, Token::UnsyntaxSplicing)),
@@ -479,7 +463,7 @@ impl<'input> Lexer<'input> {
         })
     }
 
-    fn identifier(&mut self, idx0: usize) -> Option<Result<Spanned, LexError>> {
+    fn identifier(&mut self, idx0: usize) -> Option<Result<Spanned, Error>> {
         if self.lookahead.starts_with(is_initial) {
             let (slice, idx1) = match self.bump_while(is_subsequent) {
                 Some(idx1) => (&self.text[idx0..idx1], idx1),
@@ -492,7 +476,7 @@ impl<'input> Lexer<'input> {
         }
     }
 
-    fn boolean(&mut self, idx0: usize) -> Option<Result<Spanned, LexError>> {
+    fn boolean(&mut self, idx0: usize) -> Option<Result<Spanned, Error>> {
         match &*self.lookahead {
             "#t" | "#T" | "#f" | "#F" => {
                 let token = match &*self.lookahead {
@@ -511,11 +495,11 @@ impl<'input> Lexer<'input> {
         &mut self,
         idx0: usize,
         number_flags: NumberFlags,
-    ) -> Option<Result<Spanned, LexError>> {
+    ) -> Option<Result<Spanned, Error>> {
         unimplemented!();
     }
 
-    fn number(&mut self, idx0: usize) -> Option<Result<Spanned, LexError>> {
+    fn number(&mut self, idx0: usize) -> Option<Result<Spanned, Error>> {
         lazy_static! {
             // Regex set to detect whether we're looking at a number, from its first two
             // characters.
@@ -555,12 +539,7 @@ impl<'input> Lexer<'input> {
                     s if s.eq_ignore_ascii_case("o") => radix = Some(NumberRadix::Radix8),
                     s if s.eq_ignore_ascii_case("d") => radix = Some(NumberRadix::Radix10),
                     s if s.eq_ignore_ascii_case("x") => radix = Some(NumberRadix::Radix16),
-                    _ => {
-                        return Some(Err(LexError::new(
-                            LexErrorKind::UnrecognizedNumberPrefix,
-                            idx0,
-                        )))
-                    }
+                    _ => return Some(Err(Error::new(ErrorKind::UnrecognizedNumberPrefix, idx0))),
                 }
 
                 self.bump(2);
@@ -574,14 +553,14 @@ impl<'input> Lexer<'input> {
                         radix: radix.unwrap_or(NumberRadix::Radix10),
                     },
                 ),
-                None => Some(Err(LexError::new(LexErrorKind::ExpectedNumber, idx0))),
+                None => Some(Err(Error::new(ErrorKind::ExpectedNumber, idx0))),
             }
         } else {
             None
         }
     }
 
-    fn next_unshifted(&mut self) -> Option<Result<Spanned, LexError>> {
+    fn next_unshifted(&mut self) -> Option<Result<Spanned, Error>> {
         loop {
             let idx0 = match self.location {
                 Some(idx0) => idx0,
@@ -612,19 +591,19 @@ impl<'input> Lexer<'input> {
                 .or_else(|| self.identifier(idx0))
                 .or_else(|| self.boolean(idx0))
                 .or_else(|| self.number(idx0))
-                .or_else(|| Some(Err(LexError::new(LexErrorKind::UnrecognizedToken, idx0))));
+                .or_else(|| Some(Err(Error::new(ErrorKind::UnrecognizedToken, idx0))));
         }
     }
 }
 
 impl<'input> Iterator for Lexer<'input> {
-    type Item = Result<Spanned, LexError>;
+    type Item = Result<Spanned, Error>;
 
     fn next(&mut self) -> Option<Self::Item> {
         match self.next_unshifted() {
             None => None,
             Some(Ok((l, t, r))) => Some(Ok((l + self.shift, t, r + self.shift))),
-            Some(Err(LexError { location, kind })) => Some(Err(LexError {
+            Some(Err(Error { location, kind })) => Some(Err(Error {
                 location: location + self.shift,
                 kind,
             })),
