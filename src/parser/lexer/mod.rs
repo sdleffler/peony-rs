@@ -10,6 +10,8 @@ use unicode_categories::UnicodeCategories;
 
 use atom::Atom;
 
+use self::number_lexer::Lexer as NumberLexer;
+
 fn is_whitespace(c: char) -> bool {
     match c {
         '\t' | '\n' | '\x0b' | '\x0c' | '\r' | '\u{0085}' => true,
@@ -422,6 +424,23 @@ impl<'input> Lexer<'input> {
         }
     }
 
+    fn bump_to(&mut self, bytes: usize) {
+        self.lookahead.clear();
+        self.chars
+            .by_ref()
+            .peeking_take_while(|&(idx0, _)| idx0 < bytes)
+            .for_each(|_| ());
+
+        self.chars.reset_peek();
+        if let Some(&(loc, c)) = self.chars.peek() {
+            self.location = Some(loc);
+            self.lookahead.push(c);
+            self.lookahead.extend(self.chars.peek().map(|t| t.1));
+        } else {
+            self.location = None;
+        }
+    }
+
     fn expect_delimiter<F: FnOnce() -> Result<Spanned, Error>>(
         &self,
         thunk: F,
@@ -496,7 +515,16 @@ impl<'input> Lexer<'input> {
         idx0: usize,
         number_flags: NumberFlags,
     ) -> Option<Result<Spanned, Error>> {
-        unimplemented!();
+        let (slice, idx1) = match self.bump_until(is_delimiter) {
+            Some(idx1) => (&self.text[idx0..idx1], idx1),
+            None => (&self.text[idx0..], self.text.len()),
+        };
+
+        let number_lexer = NumberLexer::new(slice, idx0, number_flags.to_radix());
+        match number::SpannedNumberParser::new().parse(&number_flags, number_lexer) {
+            Ok((idx0, number, idx1)) => Some(Ok((idx0, Token::Number(number), idx1))),
+            Err(err) => unimplemented!("o fuck: {:?}", err),
+        }
     }
 
     fn number(&mut self, idx0: usize) -> Option<Result<Spanned, Error>> {
@@ -522,7 +550,7 @@ impl<'input> Lexer<'input> {
             static ref NUMBER_START: RegexSet = RegexSet::new(&[
                 r#"^#[iIeEbBoOdDxX]$"#,
                 r#"^[+-][ni0-9.]$"#,
-                r#"^[0-9][-+@/.|eEsSfFdDlL0-9()\[\]";#\pZ]$"#,
+                r#"^[0-9][-+@/.|eEsSfFdDlL0-9()\[\]";#\t\n\x0b\x0c\r\u{0085}\pZ]$"#,
                 r#"^[.][0-9]$"#,
             ]).unwrap();
         }

@@ -37,6 +37,8 @@ extern {
     }
 }
 
+Sp<Rule>: (usize, Rule, usize) = <@L> <Rule> <@R> => (<>);
+
 pub Number: Number = {
     <Real> => Number::Real(<>),
     <Real> "@" <Real> => Number::Complex(<>),
@@ -47,6 +49,8 @@ pub Number: Number = {
     <s:Sign> <b:NanInf> "i" => Number::Complex(Real::Signed(Sign::Pos, UReal::Integer(BigUint::zero())), Real::NanInf(s, b)),
     <s:Sign> "i" => Number::Complex(Real::Signed(Sign::Pos, UReal::Integer(BigUint::zero())), Real::Signed(s, UReal::Integer(BigUint::one()))),
 };
+
+pub SpannedNumber: (usize, Number, usize) = <Sp<Number>> => <>;
 
 Real: Real = {
     <s:Sign?> <u:UReal> => Real::Signed(s.unwrap_or_default(), u),
@@ -83,10 +87,11 @@ Decimal: (Precision, &'input str, &'input str, isize) = {
 };
 
 Suffix: (Precision, isize) = {
-    <marker:ExponentMarker> <sign:Sign?> <loc: @L> <exp:"digits"> =>? {
+    <marker:ExponentMarker> <sign:Sign?> <spanned_exp:Sp<"digits">> =>? {
+        let (idx0, exp, _) = spanned_exp;
         let e = exp.parse::<isize>()
             .map_err(|err| ParseError::User {
-                error: Error::new(ErrorKind::ParseIntError(err), loc),
+                error: Error::new(ErrorKind::ParseIntError(err), idx0),
             })?;
         let signed_e = match sign {
             Some(Sign::Neg) => -e,

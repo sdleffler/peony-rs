@@ -39,6 +39,7 @@ impl Error {
     }
 }
 
+#[derive(Debug)]
 pub enum Tok<'input> {
     Digits(&'input str),
 
