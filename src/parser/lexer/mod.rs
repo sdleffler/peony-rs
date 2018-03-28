@@ -685,7 +685,7 @@ mod tests {
 
                 let string = {
                     let mut path = PathBuf::from("lexer-tests/");
-                    path.push(String::from($path) + ".gd");
+                    path.push(String::from($path) + ".pn");
                     let mut file = File::open(path).unwrap();
                     let mut buf = String::new();
                     file.read_to_string(&mut buf).unwrap();
