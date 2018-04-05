@@ -3,7 +3,9 @@ extern crate string_cache_codegen;
 
 use std::{env, fs::File, io::{Read, Write}, path::Path};
 
-const ATOMS: &'static [&'static str] = &["+", "-", "...", "head", "tail", "cons", "lambda", "let"];
+const ATOMS: &'static [&'static str] = &[
+    "+", "-", "...", "head", "tail", "cons", "lambda", "let", "gensym"
+];
 
 fn main() {
     lalrpop::process_root().unwrap();
