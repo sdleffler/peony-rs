@@ -40,9 +40,9 @@ pub enum HeapError {
 
 layout_struct! {
     extern struct Activation {
-        env: Word,
-        cs: Word,
-        tm: Raw,
+        envt: Word,
+        cont: Word,
+        template: Raw,
         pc: Raw,
 
         stack: [Word],
@@ -78,6 +78,17 @@ pub trait Word: Default + Copy + Eq + 'static {
 
     fn pack(Unpacked<Self::Tag>) -> Self;
     fn unpack(self) -> Unpacked<Self::Tag>;
+
+    /// Check to see if the word is `Nil`.
+    ///
+    /// This is implemented in terms of `unpack` by default. It should ideally be overridden for
+    /// efficiency.
+    fn is_nil(self) -> bool {
+        match self.unpack() {
+            Unpacked::Value(Value::Immediate(Immediate::Nil)) => true,
+            _ => false,
+        }
+    }
 
     /// Try to interpret the word as a value.
     fn value(self) -> Option<Value<Self::Tag>> {
@@ -200,6 +211,16 @@ pub enum Unpacked<T> {
     /// example, in an allocated vector, the first word of the allocation might be a raw length.
     /// This means that it is encoded directly as an integer rather than as an immediate value.
     Raw(u64),
+}
+
+impl<T> Unpacked<T> {
+    pub fn pointer(ptr: Pointer<T>) -> Self {
+        Unpacked::Value(Value::Pointer(ptr))
+    }
+
+    pub fn nil() -> Self {
+        Unpacked::Value(Value::Immediate(Immediate::Nil))
+    }
 }
 
 impl<T> Default for Unpacked<T> {

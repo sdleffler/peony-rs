@@ -1,7 +1,7 @@
 use std::{collections::VecDeque, sync::Arc};
 
-use vm::heap::{Address, DeepCopy, Heap, HeapError, Immediate, OfActivation, OfEnvironment, Type,
-               Unpacked as UnpackedWord, Value, Word};
+use vm::heap::{Address, DeepCopy, Heap, HeapError, Immediate, OfActivation, OfCons, OfEnvironment,
+               Type, Unpacked as UnpackedWord, Value, Word};
 
 #[derive(Debug, Fail)]
 pub enum ExecError {
@@ -76,10 +76,17 @@ pub enum Unpacked<H> {
 
     /// Save the current continuation and push it onto the continuation stack.
     ///
+    /// NB this does *not* save the program counter! The activation record's saved PC is set
+    /// to `RESUME`.
+    /// NB this will clear the stack!
+    /// TODO does it *need* to clear the stack? Would it be better just to copy the stack?
+    ///
     /// ``` ignore
     /// SaveCurrentCont(RESUME)
     ///
-    /// STACK => [] (STACK and registers copied to activation record w/ saved PC set to RESUME)
+    /// STACK => []
+    ///
+    /// CONT := ACTIVATION(ENVT, CONT, TEMPLATE, RESUME, STACK)
     /// ```
     SaveCurrentCont(usize),
 
@@ -90,10 +97,36 @@ pub enum Unpacked<H> {
     /// ``` ignore
     /// LoadCurrentCont
     ///
-    /// [.., t] => [STACK, t] (STACK and registers, including PC, loaded from activation record)
+    /// [..] => [.., ACTIVATION.STACK[..]]
+    ///
+    /// ENVT := ACTIVATION.ENVT
+    /// CONT := ACTIVATION.CONT
+    /// TEMPLATE := ACTIVATION.TEMPLATE
+    /// PC := ACTIVATION.PC
     /// ```
     LoadCurrentCont,
 
+    /// Push the contents of the "current continuation" register onto the value stack.
+    ///
+    /// There is no `PopCurrentCont`. The proper way to set the current continuation is to use a
+    /// `Call`.
+    ///
+    /// ``` ignore
+    /// PushCurrentCont
+    ///
+    /// [..] => [.., CONT]
+    /// ```
+    PushCurrentCont,
+
+    // /// Reset the current continuation, pushing it onto the delimiter stack.
+    // ///
+    // /// ``` ignore
+    // /// ResetCurrentCont
+    // ///
+    // /// DELIM := Cons(CONT, DELIM)
+    // /// CONT := Nil
+    // /// ```
+    //ResetCurrentCont,
     /// "Hooked" instructions are non-builtins.
     Hook(H),
 }
@@ -123,16 +156,23 @@ impl<W: Word, I: Insn<W>> Program<W, I> {
 #[derive(Debug)]
 pub struct Registers<W: Word> {
     /// The "environment" register.
-    env: Address<W, OfEnvironment>,
+    envt: Address<W, OfEnvironment>,
 
     /// The "continuation stack" register.
-    cs: Address<W, OfActivation>,
+    ///
+    /// This may be `None`, in which case indicating that the current continuation is to be popped
+    /// from the delimiter stack.
+    cont: Option<Address<W, OfActivation>>,
 
-    /// The "escape continuation" register.
-    ec: Address<W, OfActivation>,
+    /// The "delimiter stack" register.
+    ///
+    /// This may sometimes be `None`, in which case indicating that there is no delimiting scope.
+    /// If the continuation stack is `None` and the delimiter stack is `None` and a continuation is
+    /// loaded, then the machine halts and its final value is that of the stack.
+    delim: Option<Address<W, OfCons>>,
 
     /// The "template" register.
-    tm: usize,
+    template: usize,
 
     /// The program counter (a.k.a. instruction pointer).
     pc: usize,
@@ -164,7 +204,7 @@ where
 
     #[inline]
     pub fn scope(&mut self, scope: usize) -> Result<Address<W, OfEnvironment>, ExecError> {
-        let mut env = self.registers.env;
+        let mut env = self.registers.envt;
         for _ in 0..scope {
             let ptr = self.heap.get_mut(env).parent().pointer().unwrap();
             env = self.heap.address(ptr).unwrap();
@@ -195,6 +235,83 @@ where
         Ok(())
     }
 
+    #[inline]
+    fn save_current_cont(&mut self, resume: usize) -> Result<Action, ExecError> {
+        let addr = self.heap.alloc1::<OfActivation>(self.stack.len())?;
+
+        let env = Word::pack(UnpackedWord::pointer(self.registers.envt.into_pointer()));
+        let tm = Word::pack(UnpackedWord::Raw(self.registers.template as u64));
+        let pc = Word::pack(UnpackedWord::Raw(resume as u64));
+
+        let cs = match self.registers.cont {
+            Some(cs_addr) => Word::pack(UnpackedWord::pointer(cs_addr.into_pointer())),
+            None => Word::pack(UnpackedWord::nil()),
+        };
+
+        let mut view_mut = self.heap.get_mut(addr);
+        *view_mut.envt_mut() = env;
+        *view_mut.cont_mut() = cs;
+        *view_mut.template_mut() = tm;
+        *view_mut.pc_mut() = pc;
+
+        {
+            let (front, back) = self.stack.as_slices();
+            view_mut.stack_mut()[..front.len()].copy_from_slice(front);
+            view_mut.stack_mut()[front.len()..].copy_from_slice(back);
+        }
+
+        self.stack.clear();
+        self.registers.cont = Some(addr);
+
+        Ok(Action::Next)
+    }
+
+    #[inline]
+    fn pop_delim(&mut self) -> Result<Option<Address<W, OfActivation>>, ExecError> {
+        match self.registers.delim {
+            Some(addr) => {
+                let view = self.heap.get(addr);
+
+                let cont_addr = self.heap.address(view.head().pointer().unwrap())?;
+                let maybe_delim_addr = match view.tail().pointer() {
+                    Some(ptr) => Some(self.heap.address(ptr)?),
+                    None => {
+                        assert!(view.tail().is_nil());
+                        None
+                    }
+                };
+
+                self.registers.delim = maybe_delim_addr;
+
+                Ok(Some(cont_addr))
+            }
+            None => Ok(None),
+        }
+    }
+
+    #[inline]
+    fn load_current_cont(&mut self) -> Result<Action, ExecError> {
+        let addr = match self.registers.cont {
+            Some(addr) => addr,
+            None => match self.pop_delim()? {
+                Some(addr) => addr,
+                None => return Ok(Action::Halt),
+            },
+        };
+
+        let view = self.heap.get(addr);
+        self.registers.envt = self.heap.address(view.envt().pointer().unwrap())?;
+        self.registers.cont = if view.cont().is_nil() {
+            None
+        } else {
+            Some(self.heap.address(view.cont().pointer().unwrap())?)
+        };
+        self.registers.template = view.template().raw().unwrap() as usize;
+        self.stack.extend(view.stack().iter().cloned().rev());
+
+        Ok(Action::JumpAbs(view.pc().raw().unwrap() as usize))
+    }
+
     const TRUNCATE_BITS: u32 = 64 - W::INT_SIZE;
 
     pub fn step(&mut self) -> Result<(), ExecError> {
@@ -204,7 +321,7 @@ where
                 let value = {
                     let Template {
                         constants, index, ..
-                    } = &self.program.templates[self.registers.tm];
+                    } = &self.program.templates[self.registers.template];
                     let root = index[cst];
                     let mut copy = DeepCopy::new(constants, &mut self.heap);
                     copy.root(root)?
@@ -222,53 +339,10 @@ where
                 self.write_loc(dst, value)?;
                 Action::Next
             }
-            Unpacked::SaveCurrentCont(pc_resume) => {
-                let addr = self.heap.alloc1::<OfActivation>(self.stack.len())?;
-
-                let env = {
-                    let env_addr = self.registers.env;
-                    let env_ptr = env_addr.into_pointer();
-                    Word::pack(UnpackedWord::Value(Value::Pointer(env_ptr)))
-                };
-                let cs = {
-                    let cs_addr = self.registers.cs;
-                    let cs_ptr = cs_addr.into_pointer();
-                    Word::pack(UnpackedWord::Value(Value::Pointer(cs_ptr)))
-                };
-                let tm = {
-                    let tm_raw = self.registers.tm as u64;
-                    Word::pack(UnpackedWord::Raw(tm_raw))
-                };
-                let pc = Word::pack(UnpackedWord::Raw(pc_resume as u64));
-
-                let mut view_mut = self.heap.get_mut(addr);
-                *view_mut.env_mut() = env;
-                *view_mut.cs_mut() = cs;
-                *view_mut.tm_mut() = tm;
-                *view_mut.pc_mut() = pc;
-
-                {
-                    let (front, back) = self.stack.as_slices();
-                    view_mut.stack_mut()[..front.len()].copy_from_slice(front);
-                    view_mut.stack_mut()[front.len()..].copy_from_slice(back);
-                }
-
-                self.stack.clear();
-                self.registers.cs = addr;
-
-                Action::Next
-            }
-            Unpacked::LoadCurrentCont => {
-                let addr = self.registers.cs;
-                let view = self.heap.get(addr);
-
-                self.registers.env = self.heap.address(view.env().pointer().unwrap())?;
-                self.registers.cs = self.heap.address(view.cs().pointer().unwrap())?;
-                self.registers.tm = view.tm().raw().unwrap() as usize;
-
-                self.stack.extend(view.stack().iter().cloned().rev());
-
-                Action::JumpAbs(view.pc().raw().unwrap() as usize)
+            Unpacked::SaveCurrentCont(pc_resume) => self.save_current_cont(pc_resume)?,
+            Unpacked::LoadCurrentCont => self.load_current_cont()?,
+            Unpacked::PushCurrentCont => {
+                unimplemented!();
             }
             Unpacked::Hook(hook) => unimplemented!(),
         };
