@@ -63,6 +63,13 @@ layout_struct! {
     }
 }
 
+layout_struct! {
+    extern struct Cons {
+        head: Word,
+        tail: Word,
+    }
+}
+
 /// Trait for types usable as "machine words" for the VM.
 pub trait Word: Default + Copy + Eq + 'static {
     const INT_SIZE: u32;
