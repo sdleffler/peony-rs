@@ -94,6 +94,10 @@ pub enum Unpacked<H> {
     /// Then, extend the stack from the bottom up with the saved stack segment in the activation
     /// record.
     ///
+    /// NB `LoadCurrentCont` will pop the delimiter stack if `CONT` is `Nil`, setting `CONT` to the
+    /// saved value at the top of the delimiter stack. `CONT` is `Nil` and `DELIM` is `Nil`, then
+    /// the VM will halt.
+    ///
     /// ``` ignore
     /// LoadCurrentCont
     ///
@@ -110,6 +114,8 @@ pub enum Unpacked<H> {
     ///
     /// There is no `PopCurrentCont`. The proper way to set the current continuation is to use a
     /// `Call`.
+    ///
+    /// NB `PopCurrentCont` will error if `CONT` is `Nil`!
     ///
     /// ``` ignore
     /// PushCurrentCont
