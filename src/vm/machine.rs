@@ -245,6 +245,34 @@ where
     }
 
     #[inline]
+    fn push_constant(&mut self, cst: usize) -> Result<Action, ExecError> {
+        let value = {
+            let Template {
+                constants, index, ..
+            } = &self.program.templates[self.registers.template];
+            let root = index[cst];
+            let mut copy = DeepCopy::new(constants, &mut self.heap);
+            copy.root(root)?
+        };
+        self.stack.push_front(value);
+        Ok(Action::Next)
+    }
+
+    #[inline]
+    fn push_local(&mut self, src: Local) -> Result<Action, ExecError> {
+        let value = self.read_loc(src)?;
+        self.stack.push_front(value);
+        Ok(Action::Next)
+    }
+
+    #[inline]
+    fn pop_local(&mut self, dst: Local) -> Result<Action, ExecError> {
+        let value = self.stack.pop_front().ok_or(ExecError::EmptyStack)?;
+        self.write_loc(dst, value)?;
+        Ok(Action::Next)
+    }
+
+    #[inline]
     fn save_current_cont(&mut self, resume: usize) -> Result<Action, ExecError> {
         let addr = self.heap.alloc1::<OfActivation>(self.stack.len())?;
 
@@ -338,28 +366,9 @@ where
     pub fn step(&mut self) -> Result<(), ExecError> {
         let action = match self.fetch().unpack() {
             Unpacked::Halt => Action::Halt,
-            Unpacked::PushConstant(cst) => {
-                let value = {
-                    let Template {
-                        constants, index, ..
-                    } = &self.program.templates[self.registers.template];
-                    let root = index[cst];
-                    let mut copy = DeepCopy::new(constants, &mut self.heap);
-                    copy.root(root)?
-                };
-                self.stack.push_front(value);
-                Action::Next
-            }
-            Unpacked::PushLocal(src) => {
-                let value = self.read_loc(src)?;
-                self.stack.push_front(value);
-                Action::Next
-            }
-            Unpacked::PopLocal(dst) => {
-                let value = self.stack.pop_front().ok_or(ExecError::EmptyStack)?;
-                self.write_loc(dst, value)?;
-                Action::Next
-            }
+            Unpacked::PushConstant(cst) => self.push_constant(cst)?,
+            Unpacked::PushLocal(src) => self.push_local(src)?,
+            Unpacked::PopLocal(dst) => self.pop_local(dst)?,
             Unpacked::SaveCurrentCont(pc_resume) => self.save_current_cont(pc_resume)?,
             Unpacked::LoadCurrentCont => self.load_current_cont()?,
             Unpacked::PushCurrentCont => self.push_current_cont()?,
