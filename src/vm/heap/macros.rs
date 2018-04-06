@@ -524,12 +524,15 @@ macro_rules! layout_struct {
 
                 #[inline]
                 fn check<'a>(pointer: Pointer<W::Tag>, heap: &'a Heap<W>) -> Result<Self, HeapError> {
-                    let header = heap.words()
-                        .get(pointer.1)
-                        .cloned()
-                        .ok_or(HeapError::OutOfBounds)?
-                        .header()
-                        .ok_or(HeapError::BadHeader)?;
+                    let header = match pointer.0 {
+                        Some(hdr) => hdr,
+                        None => heap.words()
+                            .get(pointer.1)
+                            .cloned()
+                            .ok_or(HeapError::OutOfBounds)?
+                            .header()
+                            .ok_or(HeapError::BadHeader)?,
+                    };
 
                     match header {
                         Header::$name => Ok([ Of $name ]),
@@ -538,8 +541,12 @@ macro_rules! layout_struct {
                 }
 
                 #[inline]
-                fn tag(&self) -> Option<W::Tag> {
-                    None
+                fn tag(&self) -> Option<Header<W::Tag>> {
+                    if Self::NEEDS_HEADER {
+                        None
+                    } else {
+                        Some(Header::$name)
+                    }
                 }
             }
         }
@@ -562,7 +569,7 @@ macro_rules! layout_struct {
                 #[inline]
                 fn check(pointer: Pointer<W::Tag>, heap: &Heap<W>) -> Result<Self, HeapError> {
                     match pointer.0 {
-                        Some(__Tag::$name) => Ok([ Of $name ]),
+                        Some(Header::Tag(__Tag::$name)) => Ok([ Of $name ]),
                         None if Self::NEEDS_HEADER => {
                             let header = heap.words()
                                 .get(pointer.1)
@@ -581,9 +588,9 @@ macro_rules! layout_struct {
                 }
 
                 #[inline]
-                fn tag(&self) -> Option<W::Tag> {
+                fn tag(&self) -> Option<Header<W::Tag>> {
                     if Self::NEEDS_HEADER {
-                        Some(__Tag::$name)
+                        Some(Header::Tag(__Tag::$name))
                     } else {
                         None
                     }
@@ -733,7 +740,8 @@ macro_rules! layout {
                 #[inline]
                 fn check(pointer: Pointer<W::Tag>, heap: &Heap<W>) -> Result<Self, HeapError> {
                     match pointer.0 {
-                        Some(tag) => Ok(tag),
+                        Some(Header::Tag(tag)) => Ok(tag),
+                        Some(_) => Err(HeapError::TagMismatch),
                         None => {
                             let header = pointer.1
                                 .checked_sub(1)
@@ -751,9 +759,9 @@ macro_rules! layout {
                 }
 
                 #[inline]
-                fn tag(&self) -> Option<W::Tag> {
+                fn tag(&self) -> Option<Header<W::Tag>> {
                     match self {
-                        $(__Tag::$name => <[ Of $name ] as Type<W>>.tag(),)*
+                        $(__Tag::$name => <[ Of $name ] as Type<W>>::tag(&[ Of $name ]),)*
                     }
                 }
             }

@@ -152,6 +152,14 @@ pub enum Header<T> {
     /// ```
     Closure,
 
+    /// A cons-cell is a pair `(head . tail)`. In Lisps it is often called a dotted pair, and the
+    /// `head` is called the `car` and `tail`, `cdr`. We think that's not very good terminology.
+    ///
+    /// ``` ignore
+    /// [head, tail].len() == 2
+    /// ```
+    Cons,
+
     /// A header indicating the type of an allocation.
     Tag(T),
 }
@@ -168,7 +176,7 @@ pub enum Immediate {
 /// A pointer value consists of a tag, providing type information about a boxed value, and of
 /// course the location of the value.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub struct Pointer<T>(pub Option<T>, pub usize);
+pub struct Pointer<T>(pub Option<Header<T>>, pub usize);
 
 /// "Values" are words which represent runtime values. This is opposed to headers and "raw" words
 /// which represent no structured data.
@@ -250,7 +258,7 @@ pub trait Type<W: Word>: for<'a> Layout<'a, W> {
 
     fn alloc(Self::Alloc, &mut Heap<W>) -> Result<(usize, Self), HeapError>;
     fn check(Pointer<W::Tag>, &Heap<W>) -> Result<Self, HeapError>;
-    fn tag(&self) -> Option<W::Tag>;
+    fn tag(&self) -> Option<Header<W::Tag>>;
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
@@ -389,27 +397,20 @@ where
             .words()
             .get(ptr.1)
             .ok_or(HeapError::OutOfBounds)?
-            .header();
+            .header()
+            .or(ptr.0);
 
-        match maybe_header {
-            Some(Header::Environment) => self.move_object(ptr.1, OfEnvironment)
-                .map(|addr| Pointer(None, addr)),
-            Some(Header::Activation) => self.move_object(ptr.1, OfActivation)
-                .map(|addr| Pointer(None, addr)),
-            Some(Header::Closure) => self.move_object(ptr.1, OfClosure)
-                .map(|addr| Pointer(None, addr)),
-            Some(Header::Tag(tag)) => {
-                assert!(ptr.0.is_none());
-                self.move_object(ptr.1, tag).map(|addr| Pointer(None, addr))
-            }
-            None => {
-                assert!(ptr.0.is_some());
-                self.move_object(ptr.1, ptr.0.unwrap())
-                    .map(|addr| Pointer(ptr.0, addr))
-            }
-
+        let addr = match maybe_header {
             Some(Header::Moved(_)) => unreachable!("deep copy cannot modify from space"),
-        }
+            Some(Header::Environment) => self.move_object(ptr.1, OfEnvironment)?,
+            Some(Header::Activation) => self.move_object(ptr.1, OfActivation)?,
+            Some(Header::Closure) => self.move_object(ptr.1, OfClosure)?,
+            Some(Header::Cons) => self.move_object(ptr.1, OfCons)?,
+            Some(Header::Tag(tag)) => self.move_object(ptr.1, tag)?,
+            None => panic!("Headerless and tagless!"),
+        };
+
+        Ok(Pointer(ptr.0, addr))
     }
 
     fn scan_indices<I: IntoIterator<Item = usize>>(&mut self, indices: I) -> Result<(), HeapError> {
@@ -452,6 +453,7 @@ where
                 Header::Environment => self.scan_header(OfEnvironment),
                 Header::Activation => self.scan_header(OfActivation),
                 Header::Closure => self.scan_header(OfClosure),
+                Header::Cons => self.scan_header(OfCons),
                 Header::Tag(tag) => self.scan_header(tag),
             },
             Unpacked::Raw(_) => Err(HeapError::BadWord),
@@ -512,26 +514,20 @@ where
             .words()
             .get(ptr.1)
             .ok_or(HeapError::OutOfBounds)?
-            .header();
+            .header()
+            .or(ptr.0);
 
-        match maybe_header {
-            Some(Header::Moved(offset)) => Ok(Pointer(ptr.0, offset)),
-            Some(Header::Environment) => self.move_object(ptr.1, OfEnvironment)
-                .map(|addr| Pointer(None, addr)),
-            Some(Header::Activation) => self.move_object(ptr.1, OfActivation)
-                .map(|addr| Pointer(None, addr)),
-            Some(Header::Closure) => self.move_object(ptr.1, OfClosure)
-                .map(|addr| Pointer(None, addr)),
-            Some(Header::Tag(tag)) => {
-                assert!(ptr.0.is_none());
-                self.move_object(ptr.1, tag).map(|addr| Pointer(None, addr))
-            }
-            None => {
-                assert!(ptr.0.is_some());
-                self.move_object(ptr.1, ptr.0.unwrap())
-                    .map(|addr| Pointer(ptr.0, addr))
-            }
-        }
+        let addr = match maybe_header {
+            Some(Header::Moved(offset)) => offset,
+            Some(Header::Environment) => self.move_object(ptr.1, OfEnvironment)?,
+            Some(Header::Activation) => self.move_object(ptr.1, OfActivation)?,
+            Some(Header::Closure) => self.move_object(ptr.1, OfClosure)?,
+            Some(Header::Cons) => self.move_object(ptr.1, OfCons)?,
+            Some(Header::Tag(tag)) => self.move_object(ptr.1, tag)?,
+            None => panic!("Headerless and tagless!"),
+        };
+
+        Ok(Pointer(ptr.0, addr))
     }
 
     fn scan_indices<I: IntoIterator<Item = usize>>(&mut self, indices: I) -> Result<(), HeapError> {
@@ -577,6 +573,7 @@ where
                 Header::Environment => self.scan_header(OfEnvironment),
                 Header::Activation => self.scan_header(OfActivation),
                 Header::Closure => self.scan_header(OfClosure),
+                Header::Cons => self.scan_header(OfCons),
                 Header::Tag(tag) => self.scan_header(tag),
             },
             Unpacked::Raw(_) => Err(HeapError::BadWord),
@@ -703,7 +700,7 @@ mod tests {
         let result = {
             let mut copy = DeepCopyMut::new(&mut from, &mut to);
             copy.root(Unpacked::Value(Value::Pointer(Pointer(
-                Some(Tag::Cons),
+                Some(Header::Tag(Tag::Cons)),
                 11,
             ))))
         };
@@ -711,7 +708,7 @@ mod tests {
         match result {
             Ok(word) => assert_eq!(
                 word,
-                Unpacked::Value(Value::Pointer(Pointer(Some(Tag::Cons), 0)))
+                Unpacked::Value(Value::Pointer(Pointer(Some(Header::Tag(Tag::Cons)), 0)))
             ),
             Err(err) => {
                 panic!("aaaaa {}\nFROM: {:?}\nTO: {:?}\n", err, from, to);
@@ -836,7 +833,7 @@ mod tests {
     #[test]
     fn cons_view_as_ref() {
         let heap = Heap::from_words(TEST_WORDS.into(), TEST_WORDS.len());
-        let addr = heap.address::<OfCons>(Pointer(Some(Tag::Cons), 11))
+        let addr = heap.address::<OfCons>(Pointer(Some(Header::Tag(Tag::Cons)), 11))
             .unwrap();
         let view = heap.get(addr);
 
@@ -846,7 +843,7 @@ mod tests {
     #[test]
     fn cons_view_mut_as_ref() {
         let mut heap = Heap::from_words(TEST_WORDS.into(), TEST_WORDS.len());
-        let addr = heap.address::<OfCons>(Pointer(Some(Tag::Cons), 11))
+        let addr = heap.address::<OfCons>(Pointer(Some(Header::Tag(Tag::Cons)), 11))
             .unwrap();
         let view = heap.get_mut(addr);
 
@@ -856,7 +853,7 @@ mod tests {
     #[test]
     fn cons_view_mut_as_mut() {
         let mut heap = Heap::from_words(TEST_WORDS.into(), TEST_WORDS.len());
-        let addr = heap.address::<OfCons>(Pointer(Some(Tag::Cons), 11))
+        let addr = heap.address::<OfCons>(Pointer(Some(Header::Tag(Tag::Cons)), 11))
             .unwrap();
         let mut view = heap.get_mut(addr);
 
