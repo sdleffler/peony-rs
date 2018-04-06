@@ -127,15 +127,16 @@ pub enum Unpacked<H> {
     /// ```
     PushCurrentCont,
 
-    // /// Reset the current continuation, pushing it onto the delimiter stack.
-    // ///
-    // /// ``` ignore
-    // /// ResetCurrentCont
-    // ///
-    // /// DELIM := Cons(CONT, DELIM)
-    // /// CONT := Nil
-    // /// ```
-    //ResetCurrentCont,
+    /// Reset the current continuation, pushing it onto the delimiter stack.
+    ///
+    /// ``` ignore
+    /// ResetCurrentCont
+    ///
+    /// DELIM := Cons(CONT, DELIM)
+    /// CONT := Nil
+    /// ```
+    ResetCurrentCont,
+
     /// "Hooked" instructions are non-builtins.
     Hook(H),
 }
@@ -207,12 +208,12 @@ where
     W::Tag: Type<W>,
 {
     #[inline]
-    pub fn fetch(&self) -> I {
+    fn fetch(&self) -> I {
         self.program.code[self.registers.pc]
     }
 
     #[inline]
-    pub fn scope(&mut self, scope: usize) -> Result<Address<W, OfEnvironment>, ExecError> {
+    fn scope(&mut self, scope: usize) -> Result<Address<W, OfEnvironment>, ExecError> {
         let mut env = self.registers.envt;
         for _ in 0..scope {
             let ptr = self.heap.get_mut(env).parent().pointer().unwrap();
@@ -222,7 +223,7 @@ where
     }
 
     #[inline]
-    pub fn read_loc(&mut self, location: Local) -> Result<W, ExecError> {
+    fn read_loc(&mut self, location: Local) -> Result<W, ExecError> {
         let env = self.scope(location.scope)?;
         self.heap
             .get(env)
@@ -233,7 +234,7 @@ where
     }
 
     #[inline]
-    pub fn write_loc(&mut self, location: Local, word: W) -> Result<(), ExecError> {
+    fn write_loc(&mut self, location: Local, word: W) -> Result<(), ExecError> {
         let env = self.scope(location.scope)?;
         let mut view_mut = self.heap.get_mut(env);
         let local_mut = view_mut
@@ -361,6 +362,28 @@ where
         }
     }
 
+    #[inline]
+    fn reset_current_cont(&mut self) -> Result<Action, ExecError> {
+        match self.registers.cont.take() {
+            Some(addr) => {
+                let delim = self.heap.alloc0::<OfCons>()?;
+
+                {
+                    let mut view_mut = self.heap.get_mut(delim);
+                    *view_mut.head_mut() = Word::pack(UnpackedWord::pointer(addr.into_pointer()));
+                    *view_mut.tail_mut() = match self.registers.delim {
+                        Some(addr) => Word::pack(UnpackedWord::pointer(addr.into_pointer())),
+                        None => Word::pack(UnpackedWord::nil()),
+                    };
+                }
+
+                self.registers.delim = Some(delim);
+                Ok(Action::Next)
+            }
+            None => Err(ExecError::EmptyContStack),
+        }
+    }
+
     const TRUNCATE_BITS: u32 = 64 - W::INT_SIZE;
 
     pub fn step(&mut self) -> Result<(), ExecError> {
@@ -372,6 +395,7 @@ where
             Unpacked::SaveCurrentCont(pc_resume) => self.save_current_cont(pc_resume)?,
             Unpacked::LoadCurrentCont => self.load_current_cont()?,
             Unpacked::PushCurrentCont => self.push_current_cont()?,
+            Unpacked::ResetCurrentCont => self.reset_current_cont()?,
             Unpacked::Hook(hook) => unimplemented!(),
         };
 
