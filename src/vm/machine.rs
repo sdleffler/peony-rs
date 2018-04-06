@@ -17,6 +17,9 @@ pub enum ExecError {
     #[fail(display = "empty continuation stack")]
     EmptyContStack,
 
+    #[fail(display = "empty delimiter stack")]
+    EmptyDelimStack,
+
     #[fail(display = "heap error: {}", _0)]
     Heap(#[cause] HeapError),
 }
@@ -136,6 +139,22 @@ pub enum Unpacked<H> {
     /// CONT := Nil
     /// ```
     ResetCurrentCont,
+
+    /// Pop the delimiter stack into the "current continuation" register, effectively "shifting"
+    /// the execution context.
+    ///
+    /// ``` ignore
+    /// ShiftCurrentCont
+    ///
+    /// match DELIM {
+    ///     Cons(HEAD, TAIL) => {
+    ///         CONT := HEAD
+    ///         DELIM := TAIL
+    ///     }
+    ///     Nil => Err(EmptyContStack),
+    /// }
+    /// ```
+    ShiftCurrentCont,
 
     /// "Hooked" instructions are non-builtins.
     Hook(H),
@@ -384,6 +403,17 @@ where
         }
     }
 
+    #[inline]
+    fn shift_current_cont(&mut self) -> Result<Action, ExecError> {
+        match self.pop_delim()? {
+            Some(cont) => {
+                self.registers.cont = Some(cont);
+                Ok(Action::Next)
+            }
+            None => Err(ExecError::EmptyDelimStack),
+        }
+    }
+
     const TRUNCATE_BITS: u32 = 64 - W::INT_SIZE;
 
     pub fn step(&mut self) -> Result<(), ExecError> {
@@ -396,6 +426,7 @@ where
             Unpacked::LoadCurrentCont => self.load_current_cont()?,
             Unpacked::PushCurrentCont => self.push_current_cont()?,
             Unpacked::ResetCurrentCont => self.reset_current_cont()?,
+            Unpacked::ShiftCurrentCont => self.shift_current_cont()?,
             Unpacked::Hook(hook) => unimplemented!(),
         };
 
