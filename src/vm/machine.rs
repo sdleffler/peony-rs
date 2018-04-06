@@ -14,6 +14,9 @@ pub enum ExecError {
     #[fail(display = "expected non-empty value stack")]
     EmptyStack,
 
+    #[fail(display = "empty continuation stack")]
+    EmptyContStack,
+
     #[fail(display = "heap error: {}", _0)]
     Heap(#[cause] HeapError),
 }
@@ -318,6 +321,18 @@ where
         Ok(Action::JumpAbs(view.pc().raw().unwrap() as usize))
     }
 
+    #[inline]
+    fn push_current_cont(&mut self) -> Result<Action, ExecError> {
+        match self.registers.cont {
+            Some(addr) => {
+                self.stack
+                    .push_front(Word::pack(UnpackedWord::pointer(addr.into_pointer())));
+                Ok(Action::Next)
+            }
+            None => Err(ExecError::EmptyContStack),
+        }
+    }
+
     const TRUNCATE_BITS: u32 = 64 - W::INT_SIZE;
 
     pub fn step(&mut self) -> Result<(), ExecError> {
@@ -347,9 +362,7 @@ where
             }
             Unpacked::SaveCurrentCont(pc_resume) => self.save_current_cont(pc_resume)?,
             Unpacked::LoadCurrentCont => self.load_current_cont()?,
-            Unpacked::PushCurrentCont => {
-                unimplemented!();
-            }
+            Unpacked::PushCurrentCont => self.push_current_cont()?,
             Unpacked::Hook(hook) => unimplemented!(),
         };
 
